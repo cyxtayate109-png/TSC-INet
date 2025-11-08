@@ -21,6 +21,8 @@ class Linear(nn.Module):
             label_num = 120
         elif "pku" in dataset:
             label_num = 51
+        elif "uav" in dataset:
+            label_num = 155
         else:
             raise ValueError
         self.classifier = nn.Linear(hidden_size, label_num)
@@ -31,41 +33,6 @@ class Linear(nn.Module):
         return X
 
 
-class BTwins(nn.Module):
-    def __init__(self, hidden_size, lambd, pj_size):
-        super().__init__()
-        self.projector = nn.Sequential(
-            nn.Linear(hidden_size, pj_size, bias=False),
-            nn.BatchNorm1d(pj_size),
-            nn.ReLU(True),
-            nn.Linear(pj_size, pj_size, bias=False),
-            nn.BatchNorm1d(pj_size),
-            nn.ReLU(True),
-            nn.Linear(pj_size, pj_size, bias=False),
-        )
-        self.bn = nn.BatchNorm1d(pj_size, affine=False)
-        self.lambd = lambd
-
-    def forward(self, feat1, feat2):
-        feat1 = self.projector(feat1)
-        feat2 = self.projector(feat2)
-        feat1_norm = self.bn(feat1)
-        feat2_norm = self.bn(feat2)
-
-        N, D = feat1_norm.shape
-        c = (feat1_norm.T @ feat2_norm).div_(N)
-
-        on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
-        off_diag = self.off_diagonal(c).pow_(2).sum()
-        BTloss = on_diag + self.lambd * off_diag
-
-        return BTloss
-
-    def off_diagonal(self, x):
-        # return a flattened view of the off-diagonal elements of a square matrix
-        n, m = x.shape
-        assert n == m
-        return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
 
 def get_stream(data, view):
@@ -247,44 +214,6 @@ class GaussianBlurConv(nn.Module):
         return x
 
 
-def temporal_cropresize(input_data, max_frame, output_size, l_ratio=[0.1, 1]):
-    num_of_frames = max_frame
-
-    n, c, t, v, m = input_data.shape
-    min_crop_length = 64
-    scale = np.random.rand(1) * (l_ratio[1] - l_ratio[0]) + l_ratio[0]
-    temporal_crop_length = np.minimum(np.maximum(int(np.floor(num_of_frames * scale)), min_crop_length), num_of_frames)
-    start = np.random.randint(0, num_of_frames - temporal_crop_length + 1)
-    temporal_context = input_data[:, :, start:start + temporal_crop_length, :, :]
-    temporal_context = rearrange(temporal_context, 'n c t v m -> n (c v m) t')
-    temporal_context = temporal_context[:, :, :, None]
-    temporal_context = F.interpolate(temporal_context, size=(output_size, 1), mode='bilinear', align_corners=False)
-    temporal_context = temporal_context.squeeze(dim=-1)
-    temporal_context = rearrange(temporal_context, 'n (c v m) t -> n c t v m', c=c, v=v, m=m)
-    return temporal_context
-
-
-def random_spatial_flip(data, p=0.5):
-    temp = data.clone()
-    order = [0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 16,
-             17, 18, 19, 12, 13, 14, 15, 20, 23, 24, 21, 22]
-    if random.random() < p:
-        temp = temp[:, :, :, order, :]
-
-    return temp
-
-
-def random_time_flip(temp, p=0.5):
-    # temp = data.clone()
-    T = temp.shape[2]
-    if random.random() < p:
-        time_range_order = [i for i in range(T)]
-        time_range_reverse = list(reversed(time_range_order))
-        return temp[:, :, time_range_reverse, :, :]
-    else:
-        return temp
-
-
 def motion_att_temp_mask(data, mask_frame):
     n, c, t, v, m = data.shape
     temp = data.clone()
@@ -302,11 +231,6 @@ def motion_att_temp_mask(data, mask_frame):
     temp_list = temp_list.unsqueeze(1).unsqueeze(3).unsqueeze(4).repeat(1, c, 1, v, m)
     output = temp.gather(2, temp_list)
 
-    # random temp mask
-    random_frame = random.sample(range(remain_num), remain_num - mask_frame)
-    random_frame.sort()
-    output = temp_resample[:, :, random_frame, :, :]
-
     return output
 
 
@@ -323,11 +247,3 @@ def central_spacial_mask(mask_joint):
     return ignore_joint
 
 
-def semi_mask(mask_num):
-    p = random.random()
-    if p < 0.5:
-        ignore_joint = central_spacial_mask(mask_num)
-    else:
-        ignore_joint = []
-
-    return ignore_joint
