@@ -24,8 +24,7 @@
 
 <a name="Training&Testing"></a>
 
-# Training&Testing
-## Training 
+# Training
 
 - To train on NTU-RGB+D 60 under Cross-Subject evaluation, you can run
 
